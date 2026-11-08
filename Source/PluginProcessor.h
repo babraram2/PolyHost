@@ -46,6 +46,15 @@ struct Slot : public juce::AudioProcessorListener
     std::unique_ptr<juce::AudioProcessor> master;
     std::vector<std::unique_ptr<juce::AudioProcessor>> copies;
     std::atomic<bool> stateDirty { false };
+    std::atomic<int>  midiEventsSent { 0 };         // diagnostics: MIDI events forwarded to this slot's copies
+
+    bool acceptsMidi() const { return master != nullptr && master->acceptsMidi(); }
+
+    std::atomic<bool> scTrigger { true };           // feed the note gate into this effect's sidechain input
+    bool hasSidechain() const
+    {
+        return master != nullptr && master->getBusCount (true) > 1 && master->getChannelCountOfBus (true, 1) > 0;
+    }
     std::unique_ptr<PluginWindow> window;           // keep LAST: destroyed first
 
     ~Slot() override
@@ -140,13 +149,14 @@ private:
         int  note = -1, channel = 1;
         bool active = false;       // being rendered (note held, or tail still audible)
         bool held   = false;       // key is physically down
+        bool gate   = false;       // trigger level sent to effect sidechains (carried across blocks)
         uint64_t age = 0;
         int  silentSamples = 0;
     };
 
     // creation helpers
     std::unique_ptr<juce::AudioProcessor> createInstance (const juce::PluginDescription&, juce::String& err);
-    void configureInstance (juce::AudioProcessor&) const;
+    void configureInstance (juce::AudioProcessor&, bool enableSidechain) const;
     std::unique_ptr<Slot> createSlot (const juce::PluginDescription&, int nCopies, juce::String& err);
     std::unique_ptr<Slot> slotFromXml (const juce::XmlElement&, juce::String& err);
     static void copyState (Slot&);
@@ -173,6 +183,7 @@ private:
 
     juce::AudioBuffer<float> scratch;          // one voice is rendered at a time
     juce::MidiBuffer voiceMidiCopy, fxMidi;    // pristine copy of a voice's MIDI, re-sent to every effect
+    juce::AudioBuffer<float> gateBuf;          // 1 channel: note gate (1 = key down) for sidechain triggers
     juce::CriticalSection lock;                // structure lock (audio thread only try-locks)
 
     double sampleRate = 44100.0;

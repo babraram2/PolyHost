@@ -5,9 +5,11 @@
 class PolyHostEditor::Row : public juce::Component
 {
 public:
-    Row (const juce::String& title, std::function<void()> openUi, std::function<void()> remove)
-        : hasRemove ((bool) remove)
+    Row (const juce::String& title, std::function<void()> openUi, std::function<void()> remove,
+         std::function<void (bool)> onTrigger = {}, bool triggerOn = false)
+        : hasRemove ((bool) remove), hasTrigger ((bool) onTrigger)
     {
+        baseTitle = title;
         name.setText (title, juce::dontSendNotification);
         addAndMakeVisible (name);
 
@@ -19,6 +21,13 @@ public:
             rmBtn.onClick = std::move (remove);
             addAndMakeVisible (rmBtn);
         }
+
+        if (hasTrigger)
+        {
+            scBtn.setToggleState (triggerOn, juce::dontSendNotification);
+            scBtn.onClick = [this, cb = std::move (onTrigger)] { cb (scBtn.getToggleState()); };
+            addAndMakeVisible (scBtn);
+        }
     }
 
     void resized() override
@@ -26,13 +35,21 @@ public:
         auto r = getLocalBounds().reduced (2);
         if (hasRemove) rmBtn.setBounds (r.removeFromRight (70).reduced (2));
         uiBtn.setBounds (r.removeFromRight (70).reduced (2));
+        if (hasTrigger) scBtn.setBounds (r.removeFromRight (84).reduced (2));
         name.setBounds (r);
     }
 
+    void setSuffix (const juce::String& s)
+    {
+        name.setText (baseTitle + "     " + s, juce::dontSendNotification);
+    }
+
 private:
-    bool hasRemove;
+    bool hasRemove, hasTrigger;
+    juce::String baseTitle;
     juce::Label name;
     juce::TextButton uiBtn { "Open UI" }, rmBtn { "Remove" };
+    juce::ToggleButton scBtn { "Trig SC" };
 };
 
 //==============================================================================
@@ -60,10 +77,12 @@ PolyHostEditor::PolyHostEditor (PolyHostProcessor& p)
 
     proc.addChangeListener (this);
     refreshRows();
+    startTimerHz (4);
 }
 
 PolyHostEditor::~PolyHostEditor()
 {
+    stopTimer();
     proc.removeChangeListener (this);
 }
 
@@ -82,16 +101,33 @@ void PolyHostEditor::refreshRows()
 
     for (int i = 0; i < proc.getNumEffects(); ++i)
     {
-        auto* r = fxRows.add (new Row (proc.getEffect (i)->desc.name,
+        auto* fx = proc.getEffect (i);
+
+        std::function<void (bool)> scCallback;
+        if (fx->hasSidechain())
+            scCallback = [this, i] (bool on) { if (auto* s = proc.getEffect (i)) s->scTrigger = on; };
+
+        auto* r = fxRows.add (new Row (fx->desc.name,
                                        [this, i] { if (auto* s = proc.getEffect (i)) s->showEditor(); },
-                                       [this, i] { proc.removeEffect (i); }));
+                                       [this, i] { proc.removeEffect (i); },
+                                       scCallback, fx->scTrigger.load()));
         addAndMakeVisible (r);
     }
 
     voiceBox.setSelectedId (proc.getNumVoices(), juce::dontSendNotification);
-    setSize (560, 210 + 34 * juce::jmax (1, fxRows.size()));
+    setSize (680, 210 + 34 * juce::jmax (1, fxRows.size()));
     resized();
     repaint();
+}
+
+void PolyHostEditor::timerCallback()
+{
+    // Diagnostics: does each effect offer a MIDI input, and has the host sent it any events?
+    for (int i = 0; i < fxRows.size(); ++i)
+        if (auto* s = proc.getEffect (i))
+            fxRows[i]->setSuffix (juce::String (s->acceptsMidi() ? "[MIDI in: yes" : "[MIDI in: NO")
+                                  + ", events: " + juce::String (s->midiEventsSent.load())
+                                  + ", sidechain: " + (s->hasSidechain() ? (s->scTrigger.load() ? "gate" : "off") : "none") + "]");
 }
 
 void PolyHostEditor::paint (juce::Graphics& g)

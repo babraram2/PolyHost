@@ -47,12 +47,19 @@ bool PolyHostProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 //==============================================================================
 // Hosting helpers
 //==============================================================================
-void PolyHostProcessor::configureInstance (juce::AudioProcessor& p) const
+void PolyHostProcessor::configureInstance (juce::AudioProcessor& p, bool enableSidechain) const
 {
     auto layout = p.getBusesLayout();
     if (! layout.inputBuses.isEmpty())  layout.inputBuses.getReference (0)  = juce::AudioChannelSet::stereo();
     if (! layout.outputBuses.isEmpty()) layout.outputBuses.getReference (0) = juce::AudioChannelSet::stereo();
-    p.setBusesLayout (layout);                       // best effort
+
+    auto withSidechain = layout;                     // also switch on the extra (sidechain) inputs
+    if (enableSidechain)
+        for (int i = 1; i < withSidechain.inputBuses.size(); ++i)
+            withSidechain.inputBuses.getReference (i) = juce::AudioChannelSet::stereo();
+
+    if (! p.setBusesLayout (withSidechain))          // plugin refused? fall back to main buses only
+        p.setBusesLayout (layout);                   // best effort
     p.setRateAndBufferSizeDetails (sampleRate, blockSize);
     p.prepareToPlay (sampleRate, blockSize);
 }
@@ -68,7 +75,7 @@ std::unique_ptr<juce::AudioProcessor> PolyHostProcessor::createInstance (const j
         inst = formatManager.createPluginInstance (d, sampleRate, blockSize, err);   // hosted VST3/AU
 
     if (inst != nullptr)
-        configureInstance (*inst);
+        configureInstance (*inst, ! d.isInstrument);
     return inst;
 }
 
@@ -261,6 +268,7 @@ void PolyHostProcessor::prepareToPlay (double sr, int bs)
     silenceTimeout = (int) (sr * 0.5);
     voiceMidiCopy.ensureSize (4096);
     fxMidi.ensureSize (4096);
+    gateBuf.setSize (1, juce::jmax (bs, 1));
 
     auto prep = [&] (Slot* s)
     {
@@ -379,6 +387,28 @@ void PolyHostProcessor::renderVoice (int index, juce::AudioBuffer<float>& view)
     voiceMidiCopy.clear();
     voiceMidiCopy.addEvents (v.midi, 0, n, 0);
 
+    // trigger signal for effect sidechains: high from note-on to note-off, sample-accurate
+    if (gateBuf.getNumSamples() < n)
+        gateBuf.setSize (1, n, false, false, true);
+    {
+        auto* gp = gateBuf.getWritePointer (0);
+        float level = v.gate ? 1.0f : 0.0f;
+        int pos = 0;
+
+        for (const auto meta : voiceMidiCopy)
+        {
+            const int p = juce::jlimit (pos, n, meta.samplePosition);
+            juce::FloatVectorOperations::fill (gp + pos, level, p - pos);
+            pos = p;
+
+            const auto m = meta.getMessage();
+            if (m.isNoteOn())                                                   level = 1.0f;
+            else if (m.isNoteOff() || m.isAllNotesOff() || m.isAllSoundOff())  level = 0.0f;
+        }
+        juce::FloatVectorOperations::fill (gp + pos, level, n - pos);
+        v.gate = level > 0.5f;
+    }
+
     view.clear();
     auto& eng = *engine->copies[(size_t) index];
     eng.setPlayHead (playHead);
@@ -392,8 +422,15 @@ void PolyHostProcessor::renderVoice (int index, juce::AudioBuffer<float>& view)
         for (int c = 2; c < view.getNumChannels(); ++c)   // clear sidechain / extra channels
             view.clear (c, 0, n);
 
+        if (fx->scTrigger.load() && fx->hasSidechain())   // note gate -> sidechain trigger input
+            for (int c = 2; c < view.getNumChannels(); ++c)
+                view.copyFrom (c, 0, gateBuf, 0, 0, n);
+
         fxMidi.clear();
         fxMidi.addEvents (voiceMidiCopy, 0, n, 0);
+
+        if (const int ne = fxMidi.getNumEvents(); ne > 0)
+            fx->midiEventsSent += ne;
 
         auto& inst = *fx->copies[(size_t) index];
         inst.setPlayHead (playHead);

@@ -3,7 +3,8 @@
 #include "PluginProcessor.h"
 
 class PolyHostEditor : public juce::AudioProcessorEditor,
-                       private juce::ChangeListener
+                       private juce::ChangeListener,
+                       private juce::Timer
 {
 public:
     explicit PolyHostEditor (PolyHostProcessor&);
@@ -16,6 +17,7 @@ private:
     class Row;
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refreshRows(); }
+    void timerCallback() override;
     void refreshRows();
     void showPicker (bool instruments);
     void showScanner();
