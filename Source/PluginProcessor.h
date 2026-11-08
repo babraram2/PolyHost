@@ -43,8 +43,8 @@ private:
 struct Slot : public juce::AudioProcessorListener
 {
     juce::PluginDescription desc;
-    std::unique_ptr<juce::AudioPluginInstance> master;
-    std::vector<std::unique_ptr<juce::AudioPluginInstance>> copies;
+    std::unique_ptr<juce::AudioProcessor> master;
+    std::vector<std::unique_ptr<juce::AudioProcessor>> copies;
     std::atomic<bool> stateDirty { false };
     std::unique_ptr<PluginWindow> window;           // keep LAST: destroyed first
 
@@ -145,8 +145,8 @@ private:
     };
 
     // creation helpers
-    std::unique_ptr<juce::AudioPluginInstance> createInstance (const juce::PluginDescription&, juce::String& err);
-    void configureInstance (juce::AudioPluginInstance&) const;
+    std::unique_ptr<juce::AudioProcessor> createInstance (const juce::PluginDescription&, juce::String& err);
+    void configureInstance (juce::AudioProcessor&) const;
     std::unique_ptr<Slot> createSlot (const juce::PluginDescription&, int nCopies, juce::String& err);
     std::unique_ptr<Slot> slotFromXml (const juce::XmlElement&, juce::String& err);
     static void copyState (Slot&);

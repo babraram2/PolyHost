@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "InternalOscillator.h"
 
 //==============================================================================
 class PolyHostEditor::Row : public juce::Component
@@ -145,6 +146,13 @@ void PolyHostEditor::showPicker (bool instruments)
     juce::PopupMenu menu;
     juce::Array<juce::PluginDescription> choices;
 
+    if (instruments)                                   // built-in engine always available
+    {
+        choices.add (InternalOscillator::makeDescription());
+        menu.addItem (choices.size(), "Built-in Oscillator (sine / triangle / saw / pulse / noise)");
+        menu.addSeparator();
+    }
+
     for (auto& d : types)
         if (d.isInstrument == instruments)
         {
@@ -152,8 +160,8 @@ void PolyHostEditor::showPicker (bool instruments)
             menu.addItem (choices.size(), d.name + "  (" + d.manufacturerName + ")");
         }
 
-    if (choices.isEmpty())
-        menu.addItem (-1, "Nothing found - press 'Scan plugins...' first", false);
+    if (choices.size() == (instruments ? 1 : 0))
+        menu.addItem (-1, "No hosted plugins found - press 'Scan plugins...' first", false);
 
     auto* target = instruments ? &engineBtn : &fxBtn;
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target),

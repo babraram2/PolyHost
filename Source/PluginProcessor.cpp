@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "InternalOscillator.h"
 
 //==============================================================================
 PolyHostProcessor::PolyHostProcessor()
@@ -46,7 +47,7 @@ bool PolyHostProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 //==============================================================================
 // Hosting helpers
 //==============================================================================
-void PolyHostProcessor::configureInstance (juce::AudioPluginInstance& p) const
+void PolyHostProcessor::configureInstance (juce::AudioProcessor& p) const
 {
     auto layout = p.getBusesLayout();
     if (! layout.inputBuses.isEmpty())  layout.inputBuses.getReference (0)  = juce::AudioChannelSet::stereo();
@@ -56,10 +57,16 @@ void PolyHostProcessor::configureInstance (juce::AudioPluginInstance& p) const
     p.prepareToPlay (sampleRate, blockSize);
 }
 
-std::unique_ptr<juce::AudioPluginInstance> PolyHostProcessor::createInstance (const juce::PluginDescription& d, juce::String& err)
+std::unique_ptr<juce::AudioProcessor> PolyHostProcessor::createInstance (const juce::PluginDescription& d, juce::String& err)
 {
     jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
-    auto inst = formatManager.createPluginInstance (d, sampleRate, blockSize, err);
+
+    std::unique_ptr<juce::AudioProcessor> inst;
+    if (d.pluginFormatName == InternalOscillator::formatName)
+        inst = std::make_unique<InternalOscillator>();                       // built-in engine
+    else
+        inst = formatManager.createPluginInstance (d, sampleRate, blockSize, err);   // hosted VST3/AU
+
     if (inst != nullptr)
         configureInstance (*inst);
     return inst;
@@ -171,7 +178,7 @@ void PolyHostProcessor::setNumVoices (int n)
     for (auto& e : effects) slots.push_back (e.get());
 
     // Build the new instances OUTSIDE the lock (this can take a while)
-    std::vector<std::vector<std::unique_ptr<juce::AudioPluginInstance>>> extra (slots.size());
+    std::vector<std::vector<std::unique_ptr<juce::AudioProcessor>>> extra (slots.size());
     if (n > current)
     {
         for (size_t s = 0; s < slots.size(); ++s)
@@ -190,7 +197,7 @@ void PolyHostProcessor::setNumVoices (int n)
         }
     }
 
-    std::vector<std::unique_ptr<juce::AudioPluginInstance>> graveyard;
+    std::vector<std::unique_ptr<juce::AudioProcessor>> graveyard;
     {
         const juce::ScopedLock sl (lock);
         for (size_t s = 0; s < slots.size(); ++s)
@@ -256,7 +263,7 @@ void PolyHostProcessor::prepareToPlay (double sr, int bs)
     auto prep = [&] (Slot* s)
     {
         if (s == nullptr) return;
-        auto one = [&] (juce::AudioPluginInstance& i) { i.setRateAndBufferSizeDetails (sr, bs); i.prepareToPlay (sr, bs); };
+        auto one = [&] (juce::AudioProcessor& i) { i.setRateAndBufferSizeDetails (sr, bs); i.prepareToPlay (sr, bs); };
         one (*s->master);
         for (auto& c : s->copies) one (*c);
     };
