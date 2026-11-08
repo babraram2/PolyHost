@@ -259,6 +259,8 @@ void PolyHostProcessor::prepareToPlay (double sr, int bs)
     sampleRate = sr;
     blockSize  = bs;
     silenceTimeout = (int) (sr * 0.5);
+    voiceMidiCopy.ensureSize (4096);
+    fxMidi.ensureSize (4096);
 
     auto prep = [&] (Slot* s)
     {
@@ -373,21 +375,29 @@ void PolyHostProcessor::renderVoice (int index, juce::AudioBuffer<float>& view)
     auto* playHead = getPlayHead();
 
     // 1. sound engine -> this voice's private signal
+    // plugins may consume or rewrite the MIDI buffer they are given, so keep a pristine copy
+    voiceMidiCopy.clear();
+    voiceMidiCopy.addEvents (v.midi, 0, n, 0);
+
     view.clear();
     auto& eng = *engine->copies[(size_t) index];
     eng.setPlayHead (playHead);
     eng.processBlock (view, v.midi);
 
-    // 2. this voice's private effect chain (its own filter/reverb/... instances)
+    // 2. this voice's private effect chain (its own filter/reverb/... instances).
+    //    Every effect receives the SAME note/CC/pitch-bend events as its voice's engine,
+    //    so MIDI-triggered effects (gates, retriggered LFOs/envelopes, ...) fire per note.
     for (auto& fx : effects)
     {
         for (int c = 2; c < view.getNumChannels(); ++c)   // clear sidechain / extra channels
             view.clear (c, 0, n);
 
-        noMidi.clear();
+        fxMidi.clear();
+        fxMidi.addEvents (voiceMidiCopy, 0, n, 0);
+
         auto& inst = *fx->copies[(size_t) index];
         inst.setPlayHead (playHead);
-        inst.processBlock (view, noMidi);
+        inst.processBlock (view, fxMidi);
     }
 
     // 3. free the voice when released and silent long enough (lets reverb tails ring out)

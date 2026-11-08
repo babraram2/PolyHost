@@ -172,7 +172,7 @@ private:
     std::array<Voice, maxVoices> voices;
 
     juce::AudioBuffer<float> scratch;          // one voice is rendered at a time
-    juce::MidiBuffer noMidi;                   // fed to effects
+    juce::MidiBuffer voiceMidiCopy, fxMidi;    // pristine copy of a voice's MIDI, re-sent to every effect
     juce::CriticalSection lock;                // structure lock (audio thread only try-locks)
 
     double sampleRate = 44100.0;
